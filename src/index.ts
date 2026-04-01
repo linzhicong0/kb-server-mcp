@@ -2,15 +2,20 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
 import { scanKB } from "./scanner.js";
-import { searchEntries, listEntries, formatResults } from "./search.js";
+import { formatAllKeywords, formatEntriesByKeywords } from "./search.js";
 import type { KBEntry } from "./types.js";
 
 const KB_DIR = process.env.KB_DIR ?? "./knowledge-base";
-const DEFAULT_PAGE_SIZE = 15;
+const TRANSPORT = (process.env.TRANSPORT ?? "stdio") as "stdio" | "http" | "sse";
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 // ─── Build in-memory index at startup ───
 
@@ -44,100 +49,204 @@ try {
   console.error(`[kb] File watching not available for ${kbAbsDir}`);
 }
 
-// ─── MCP Server ───
+// ─── MCP Server factory ───
+// Creates a fresh McpServer bound to the current in-memory index.
+// Called once for stdio, and once per HTTP/SSE session for other transports.
 
-const server = new McpServer({
-  name: "kb",
-  version: "1.0.0",
-});
+function createServer(): McpServer {
+  const server = new McpServer({ name: "kb", version: "1.0.0" });
 
-server.tool(
-  "kb_search",
-  `Search the knowledge base by keywords. Returns paginated frontmatter entries
-(title, description, read_when, keywords) ranked by relevance. Use this first
-to find relevant files, then use kb_read to load the full content of matching files.`,
-  {
-    query: z.string().describe("Search terms — space-separated keywords to match against title, description, read_when, and keywords fields"),
-    page: z.number().default(1).describe("Page number (1-indexed)"),
-    size: z.number().default(DEFAULT_PAGE_SIZE).describe("Results per page"),
-  },
-  async ({ query, page, size }) => {
-    const result = searchEntries(index, query, page, size);
-    const text = formatResults(result, true);
-    return { content: [{ type: "text", text }] };
-  },
-);
+  server.tool(
+    "kb_list_keywords",
+    `ALWAYS call this tool first before any other KB tool.
+Returns every keyword available in the knowledge base, plus a required 3-step
+workflow you must follow:
+  Step 1 — kb_list_keywords            (this tool) discover available keywords
+  Step 2 — kb_list_frontmatter_by_keywords   narrow down to relevant files
+  Step 3 — kb_read_file                load the full content of a chosen file
+Do NOT skip steps or call kb_read_file without first completing steps 1 and 2.`,
+    {},
+    async () => {
+      const text = formatAllKeywords(index);
+      return { content: [{ type: "text", text }] };
+    },
+  );
 
-server.tool(
-  "kb_list",
-  `Browse all knowledge base entries paginated. Returns frontmatter (title,
-description, read_when, keywords) for each file. Use this to explore the KB
-when you don't have specific search terms.`,
-  {
-    page: z.number().default(1).describe("Page number (1-indexed)"),
-    size: z.number().default(DEFAULT_PAGE_SIZE).describe("Results per page"),
-  },
-  async ({ page, size }) => {
-    const result = listEntries(index, page, size);
-    const text = formatResults(result, false);
-    return { content: [{ type: "text", text }] };
-  },
-);
+  server.tool(
+    "kb_list_frontmatter_by_keywords",
+    `Step 2 of the required KB workflow. Call this after kb_list_keywords.
+Accepts one or more keywords and returns the title, file path, and read_when
+triggers of every KB file that matches at least one keyword.
+Use the returned file paths with kb_read_file to load the full content.`,
+    {
+      keywords: z
+        .array(z.string())
+        .describe("One or more keywords from kb_list_keywords to filter KB entries"),
+    },
+    async ({ keywords }) => {
+      const text = formatEntriesByKeywords(index, keywords);
+      return { content: [{ type: "text", text }] };
+    },
+  );
 
-server.tool(
-  "kb_read",
-  `Read the full content of a specific knowledge base file by its relative path.
-Use this after kb_search or kb_list to load the complete document.`,
-  {
-    path: z.string().describe("Relative path of the KB file (as shown in kb_search/kb_list results)"),
-  },
-  async ({ path: filePath }) => {
-    // Sanitize: prevent path traversal
-    const sanitized = filePath.replace(/\.\./g, "").replace(/\\/g, "/");
-    const fullPath = path.join(kbAbsDir, sanitized);
+  server.tool(
+    "kb_read_file",
+    `Step 3 of the required KB workflow. Call this after kb_list_frontmatter_by_keywords.
+Loads the complete markdown content of a single KB file by its relative filename.
+Only the frontmatter and body of the requested file are returned — no index data —
+keeping token usage minimal.`,
+    {
+      filename: z
+        .string()
+        .describe("Relative filename of the KB file as returned by kb_list_frontmatter_by_keywords (e.g. api-design.md)"),
+    },
+    async ({ filename }) => {
+      const sanitized = filename.replace(/\.\./g, "").replace(/\\/g, "/");
+      const fullPath = path.join(kbAbsDir, sanitized);
 
-    if (!fullPath.startsWith(kbAbsDir)) {
-      return {
-        content: [{ type: "text", text: `Error: path escapes KB directory: ${filePath}` }],
-        isError: true,
+      if (!fullPath.startsWith(kbAbsDir)) {
+        return {
+          content: [{ type: "text", text: `Error: path escapes KB directory: ${filename}` }],
+          isError: true,
+        };
+      }
+
+      try {
+        const content = fs.readFileSync(fullPath, "utf-8");
+        return { content: [{ type: "text", text: content }] };
+      } catch {
+        return {
+          content: [{ type: "text", text: `Error: file not found: ${filename}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  return server;
+}
+
+// ─── Transport: stdio (default) ───
+
+async function startStdio(): Promise<void> {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error(`[kb] stdio transport ready — ${index.length} files indexed`);
+}
+
+// ─── Transport: HTTP (Streamable HTTP, MCP 2025-03-26) ───
+// Endpoint: POST/GET/DELETE /mcp
+// Session ID is sent by the server in the mcp-session-id response header and
+// must be echoed back by the client in subsequent requests.
+
+async function startHttp(): Promise<void> {
+  const app = createMcpExpressApp();
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  app.post("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    let transport = sessionId ? transports.get(sessionId) : undefined;
+
+    if (!transport) {
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          transports.set(id, transport!);
+        },
+      });
+      transport.onclose = () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        if (transport!.sessionId) transports.delete(transport!.sessionId);
       };
+      await createServer().connect(transport);
     }
 
-    try {
-      const content = fs.readFileSync(fullPath, "utf-8");
-      return { content: [{ type: "text", text: content }] };
-    } catch {
-      return {
-        content: [{ type: "text", text: `Error: file not found: ${filePath}` }],
-        isError: true,
-      };
-    }
-  },
-);
+    await transport.handleRequest(req, res, req.body);
+  });
 
-server.tool(
-  "kb_stats",
-  "Get knowledge base statistics: total files, directory path, index status.",
-  {},
-  async () => {
-    const text = [
-      `Knowledge Base Statistics:`,
-      `  Directory: ${kbAbsDir}`,
-      `  Total files: ${index.length}`,
-      `  Files with keywords: ${index.filter((e) => e.keywords.length > 0).length}`,
-      `  Files with read_when: ${index.filter((e) => e.read_when.length > 0).length}`,
-      `  Files with description: ${index.filter((e) => e.description.length > 0).length}`,
-    ].join("\n");
-    return { content: [{ type: "text", text }] };
-  },
-);
+  app.get("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      res.status(400).json({ error: "Invalid or missing mcp-session-id header" });
+      return;
+    }
+    await transport.handleRequest(req, res);
+  });
+
+  app.delete("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    await transport.handleRequest(req, res);
+  });
+
+  app.listen(PORT, () => {
+    console.error(`[kb] HTTP MCP server (Streamable HTTP) listening on http://127.0.0.1:${PORT}/mcp`);
+    console.error(`[kb] ${index.length} files indexed`);
+  });
+
+  process.on("SIGINT", async () => {
+    for (const t of transports.values()) await t.close().catch(() => { });
+    process.exit(0);
+  });
+}
+
+// ─── Transport: SSE (legacy, MCP 2024-11-05) ───
+// Two endpoints: GET /sse establishes the stream; POST /messages sends messages.
+
+async function startSse(): Promise<void> {
+  const app = createMcpExpressApp();
+  const transports = new Map<string, SSEServerTransport>();
+
+  app.get("/sse", async (req, res) => {
+    const transport = new SSEServerTransport("/messages", res);
+    transports.set(transport.sessionId, transport);
+    transport.onclose = () => transports.delete(transport.sessionId);
+    await createServer().connect(transport);
+    console.error(`[kb] SSE session opened: ${transport.sessionId}`);
+  });
+
+  app.post("/messages", async (req, res) => {
+    const sessionId = req.query["sessionId"] as string | undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      res.status(404).send("Session not found");
+      return;
+    }
+    await transport.handlePostMessage(req, res, req.body);
+  });
+
+  app.listen(PORT, () => {
+    console.error(`[kb] SSE MCP server (legacy 2024-11-05 protocol) listening on http://127.0.0.1:${PORT}/sse`);
+    console.error(`[kb] POST messages to http://127.0.0.1:${PORT}/messages?sessionId=<id>`);
+    console.error(`[kb] ${index.length} files indexed`);
+  });
+
+  process.on("SIGINT", async () => {
+    for (const t of transports.values()) await t.close().catch(() => { });
+    process.exit(0);
+  });
+}
 
 // ─── Start ───
 
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`[kb] MCP server started — ${index.length} files indexed`);
+  switch (TRANSPORT) {
+    case "http":
+      await startHttp();
+      break;
+    case "sse":
+      await startSse();
+      break;
+    default:
+      await startStdio();
+  }
 }
 
 main().catch((err) => {
