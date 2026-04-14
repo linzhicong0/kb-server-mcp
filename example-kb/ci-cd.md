@@ -19,6 +19,7 @@ keywords:
   - staging
   - production
   - rollback
+layer: devops
 ---
 
 # CI/CD Pipeline (GitHub Actions)
@@ -31,11 +32,11 @@ Push → Lint → Type Check → Unit Tests → Integration Tests → Deploy Sta
 
 ## Environments
 
-| Environment | Branch | Auto-deploy | Approval |
-|-------------|--------|-------------|----------|
-| Development | `develop` | Yes | None |
-| Staging | `release/*` | Yes | None |
-| Production | `main` | Yes | 1 reviewer |
+| Environment | Branch      | Auto-deploy | Approval   |
+| ----------- | ----------- | ----------- | ---------- |
+| Development | `develop`   | Yes         | None       |
+| Staging     | `release/*` | Yes         | None       |
+| Production  | `main`      | Yes         | 1 reviewer |
 
 ## Secrets Management
 

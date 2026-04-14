@@ -4,4 +4,5 @@ export type KBEntry = {
   description: string;
   read_when: string[];
   keywords: string[];
+  layer: string;
 };

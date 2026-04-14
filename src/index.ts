@@ -14,7 +14,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
 import { scanKB } from "./scanner.js";
-import { formatAllKeywords, formatEntriesByKeywords } from "./search.js";
+import { formatAllLayers, formatAllKeywords, formatEntriesByKeywords } from "./search.js";
 import type { KBEntry } from "./types.js";
 
 const KB_DIR = process.env.KB_DIR ?? "./knowledge-base";
@@ -61,19 +61,41 @@ function createServer(): McpServer {
   const server = new McpServer({ name: "kb", version: "1.0.0" });
 
   server.registerTool(
-    "kb_list_keywords",
+    "kb_list_layers",
     {
       description:
         `ALWAYS call this tool first before any other KB tool.\n` +
-        `Returns every keyword available in the knowledge base, plus a required 3-step\n` +
+        `Returns every layer available in the knowledge base, plus a required 4-step\n` +
         `workflow you must follow:\n` +
-        `  Step 1 — kb_list_keywords            (this tool) discover available keywords\n` +
-        `  Step 2 — kb_list_frontmatter_by_keywords   narrow down to relevant files\n` +
-        `  Step 3 — kb_read_file                load the full content of a chosen file\n` +
-        `Do NOT skip steps or call kb_read_file without first completing steps 1 and 2.`,
+        `  Step 1 — kb_list_layers               (this tool) discover available layers\n` +
+        `  Step 2 — kb_list_keywords             discover keywords, optionally filtered by layer\n` +
+        `  Step 3 — kb_list_frontmatter_by_keywords   narrow down to relevant files\n` +
+        `  Step 4 — kb_read_file                 load the full content of a chosen file\n` +
+        `Do NOT skip steps or call kb_read_file without first completing steps 1–3.`,
     },
     async () => {
-      const text = formatAllKeywords(index);
+      const text = formatAllLayers(index);
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "kb_list_keywords",
+    {
+      description:
+        `Step 2 of the required KB workflow. Call this after kb_list_layers.\n` +
+        `Returns every keyword available in the knowledge base, optionally filtered by layer.\n` +
+        `If no layer is provided, keywords from all layers are returned.\n` +
+        `Pick relevant keywords and use them with kb_list_frontmatter_by_keywords.`,
+      inputSchema: {
+        layer: z
+          .string()
+          .optional()
+          .describe("Optional layer name from kb_list_layers to filter keywords (e.g. 'backend'). Omit to see keywords from all layers."),
+      },
+    },
+    async ({ layer }) => {
+      const text = formatAllKeywords(index, layer);
       return { content: [{ type: "text", text }] };
     },
   );
@@ -82,8 +104,8 @@ function createServer(): McpServer {
     "kb_list_frontmatter_by_keywords",
     {
       description:
-        `Step 2 of the required KB workflow. Call this after kb_list_keywords.\n` +
-        `Accepts one or more keywords and returns the title, file path, and read_when\n` +
+        `Step 3 of the required KB workflow. Call this after kb_list_keywords.\n` +
+        `Accepts one or more keywords and returns the title, file path, layer, and read_when\n` +
         `triggers of every KB file that matches at least one keyword.\n` +
         `Use the returned file paths with kb_read_file to load the full content.`,
       inputSchema: {
@@ -102,7 +124,7 @@ function createServer(): McpServer {
     "kb_read_file",
     {
       description:
-        `Step 3 of the required KB workflow. Call this after kb_list_frontmatter_by_keywords.\n` +
+        `Step 4 of the required KB workflow. Call this after kb_list_frontmatter_by_keywords.\n` +
         `Loads the complete markdown content of a single KB file by its relative filename.\n` +
         `Only the frontmatter and body of the requested file are returned — no index data —\n` +
         `keeping token usage minimal.`,

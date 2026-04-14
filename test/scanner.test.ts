@@ -20,7 +20,7 @@ describe("scanKB", () => {
         assert.deepEqual(paths, [...paths].sort());
     });
 
-    it("parses title, description, read_when, keywords from frontmatter", () => {
+    it("parses title, description, read_when, keywords, layer from frontmatter", () => {
         const entries = scanKB(FIXTURES);
         const alpha = entries.find((e) => e.relativePath === "alpha.md");
         assert.ok(alpha, "alpha.md should be in index");
@@ -31,9 +31,17 @@ describe("scanKB", () => {
             "When debugging alpha issues",
         ]);
         assert.deepEqual(alpha.keywords, ["alpha", "feature", "core"]);
+        assert.equal(alpha.layer, "backend");
     });
 
-    it("falls back to filename as title when frontmatter has no title", () => {
+    it("defaults layer to 'default' when not present in frontmatter", () => {
+        const entries = scanKB(FIXTURES);
+        const beta = entries.find((e) => e.relativePath === "beta.md");
+        assert.ok(beta, "beta.md should be in index");
+        assert.equal(beta.layer, "default");
+    });
+
+    it("defaults layer to 'default' when no frontmatter exists", () => {
         const entries = scanKB(FIXTURES);
         const noFm = entries.find((e) => e.relativePath === "no-frontmatter.md");
         assert.ok(noFm, "no-frontmatter.md should be in index");
@@ -41,6 +49,7 @@ describe("scanKB", () => {
         assert.equal(noFm.description, "");
         assert.deepEqual(noFm.read_when, []);
         assert.deepEqual(noFm.keywords, []);
+        assert.equal(noFm.layer, "default");
     });
 
     it("returns empty array for a non-existent directory", () => {

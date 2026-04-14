@@ -22,7 +22,7 @@ case "$TRANSPORT" in
     ;;
 esac
 
-KB_DIR="${KB_DIR:-./knowledge-base}"
+KB_DIR="${KB_DIR:-./example-kb}"
 
 echo "[kb] Transport : $TRANSPORT"
 if [[ "$TRANSPORT" != "stdio" ]]; then

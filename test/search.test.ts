@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatAllKeywords, formatEntriesByKeywords } from "../src/search.js";
+import { formatAllLayers, formatAllKeywords, formatEntriesByKeywords } from "../src/search.js";
 import type { KBEntry } from "../src/types.js";
 
 // ── Shared fixtures ──────────────────────────────────────────────────────────
@@ -11,6 +11,7 @@ const ALPHA: KBEntry = {
     description: "Describes the alpha feature",
     read_when: ["When working on alpha features", "When debugging alpha issues"],
     keywords: ["alpha", "feature", "core"],
+    layer: "backend",
 };
 
 const BETA: KBEntry = {
@@ -19,6 +20,7 @@ const BETA: KBEntry = {
     description: "Describes the beta feature",
     read_when: ["When working on beta features"],
     keywords: ["beta", "feature", "experimental"],
+    layer: "default",
 };
 
 const DUP: KBEntry = {
@@ -27,9 +29,57 @@ const DUP: KBEntry = {
     description: "",
     read_when: [],
     keywords: ["dup", "DUP", "Dup", "unique"],
+    layer: "frontend",
 };
 
 const INDEX: KBEntry[] = [ALPHA, BETA, DUP];
+
+// ── formatAllLayers ──────────────────────────────────────────────────────────
+
+describe("formatAllLayers", () => {
+    it("includes a header with file count and layer count", () => {
+        const out = formatAllLayers(INDEX);
+        assert.ok(out.includes("3 files"), "should mention 3 files");
+        assert.ok(out.includes("3 layers"), "should mention 3 layers");
+    });
+
+    it("lists all unique layers sorted alphabetically", () => {
+        const out = formatAllLayers(INDEX);
+        assert.ok(out.includes("backend"));
+        assert.ok(out.includes("default"));
+        assert.ok(out.includes("frontend"));
+    });
+
+    it("deduplicates layers case-insensitively", () => {
+        const entries: KBEntry[] = [
+            { ...ALPHA, layer: "Backend" },
+            { ...BETA, layer: "backend" },
+        ];
+        const out = formatAllLayers(entries);
+        const matches = out.match(/\bbackend\b/gi) ?? [];
+        assert.equal(matches.length, 1, "layer 'backend' should appear exactly once");
+    });
+
+    it("mentions the required 4-step workflow", () => {
+        const out = formatAllLayers(INDEX);
+        assert.ok(out.includes("kb_list_layers"));
+        assert.ok(out.includes("kb_list_keywords"));
+        assert.ok(out.includes("kb_list_frontmatter_by_keywords"));
+        assert.ok(out.includes("kb_read_file"));
+    });
+
+    it("handles an empty index", () => {
+        const out = formatAllLayers([]);
+        assert.ok(out.includes("0 files"));
+        assert.ok(out.includes("0 layers"));
+    });
+
+    it("handles a single entry", () => {
+        const out = formatAllLayers([ALPHA]);
+        assert.ok(out.includes("1 file"), "should use singular 'file'");
+        assert.ok(out.includes("1 layer"), "should use singular 'layer'");
+    });
+});
 
 // ── formatAllKeywords ────────────────────────────────────────────────────────
 
@@ -55,7 +105,7 @@ describe("formatAllKeywords", () => {
         assert.deepEqual(kws, [...kws].sort(), "keywords should be sorted");
     });
 
-    it("includes all unique keywords from all entries", () => {
+    it("includes all unique keywords from all entries when no layer given", () => {
         const out = formatAllKeywords(INDEX);
         const expected = ["alpha", "beta", "core", "dup", "experimental", "feature", "unique"];
         for (const kw of expected) {
@@ -63,8 +113,28 @@ describe("formatAllKeywords", () => {
         }
     });
 
-    it("mentions the required 3-step workflow", () => {
+    it("filters keywords by layer", () => {
+        const out = formatAllKeywords(INDEX, "backend");
+        assert.ok(out.includes("alpha"), "alpha keyword should be present for backend layer");
+        assert.ok(out.includes("core"), "core keyword should be present for backend layer");
+        assert.ok(!out.includes("beta"), "beta keyword should NOT be present for backend layer");
+        assert.ok(out.includes("1 file"), "should mention 1 file for backend layer");
+    });
+
+    it("layer filter is case-insensitive", () => {
+        const out = formatAllKeywords(INDEX, "BACKEND");
+        assert.ok(out.includes("alpha"), "should match with uppercase layer name");
+    });
+
+    it("returns empty keywords for unknown layer", () => {
+        const out = formatAllKeywords(INDEX, "nonexistent");
+        assert.ok(out.includes("0 files"), "should mention 0 files for unknown layer");
+        assert.ok(out.includes("0 unique keywords"), "should mention 0 keywords for unknown layer");
+    });
+
+    it("mentions the required 4-step workflow", () => {
         const out = formatAllKeywords(INDEX);
+        assert.ok(out.includes("kb_list_layers"));
         assert.ok(out.includes("kb_list_keywords"));
         assert.ok(out.includes("kb_list_frontmatter_by_keywords"));
         assert.ok(out.includes("kb_read_file"));
@@ -105,6 +175,11 @@ describe("formatEntriesByKeywords", () => {
     it("includes file path in output", () => {
         const out = formatEntriesByKeywords(INDEX, ["alpha"]);
         assert.ok(out.includes("alpha.md"));
+    });
+
+    it("includes layer in output", () => {
+        const out = formatEntriesByKeywords(INDEX, ["alpha"]);
+        assert.ok(out.includes("layer: backend"));
     });
 
     it("includes read_when triggers when present", () => {

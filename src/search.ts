@@ -1,25 +1,60 @@
 import type { KBEntry } from "./types.js";
 
 /**
- * Return a deduplicated, sorted list of every keyword across all KB entries.
+ * Return a deduplicated, sorted list of every layer across all KB entries.
  * Formatted as a prompt-ready string that instructs the agent on next steps.
  */
-export function formatAllKeywords(index: KBEntry[]): string {
+export function formatAllLayers(index: KBEntry[]): string {
   const all = new Set<string>();
   for (const entry of index) {
+    all.add(entry.layer.toLowerCase().trim());
+  }
+  const sorted = [...all].sort();
+
+  return [
+    `Knowledge base contains ${index.length} ${index.length === 1 ? "file" : "files"} across ${sorted.length} ${sorted.length === 1 ? "layer" : "layers"}.`,
+    "",
+    "REQUIRED WORKFLOW — you MUST follow these steps in order:",
+    "  Step 1. kb_list_layers                      ← you are here",
+    "  Step 2. kb_list_keywords(layer?)             ← pick a layer (or omit for all), discover keywords",
+    "  Step 3. kb_list_frontmatter_by_keywords(keywords) ← narrow down to relevant files",
+    "  Step 4. kb_read_file(filename)               ← load the full content of a specific file",
+    "",
+    "Available layers:",
+    "",
+    sorted.join(", "),
+  ].join("\n");
+}
+
+/**
+ * Return a deduplicated, sorted list of every keyword across KB entries,
+ * optionally filtered by layer.
+ * Formatted as a prompt-ready string that instructs the agent on next steps.
+ */
+export function formatAllKeywords(index: KBEntry[], layer?: string): string {
+  const filtered = layer
+    ? index.filter((e) => e.layer.toLowerCase().trim() === layer.toLowerCase().trim())
+    : index;
+
+  const all = new Set<string>();
+  for (const entry of filtered) {
     for (const kw of entry.keywords) {
       all.add(kw.toLowerCase().trim());
     }
   }
   const sorted = [...all].sort();
 
+  const layerInfo = layer ? ` in layer '${layer}'` : "";
+  const fileCount = filtered.length;
+
   return [
-    `Knowledge base contains ${index.length} ${index.length === 1 ? "file" : "files"} and ${sorted.length} unique keywords.`,
+    `Knowledge base contains ${fileCount} ${fileCount === 1 ? "file" : "files"}${layerInfo} and ${sorted.length} unique keywords.`,
     "",
     "REQUIRED WORKFLOW — you MUST follow these steps in order:",
-    "  Step 1. kb_list_keywords                    ← you are here",
-    "  Step 2. kb_list_frontmatter_by_keywords(keywords) ← pick relevant keywords from the list above",
-    "  Step 3. kb_read_file(filename)              ← load the full content of a specific file",
+    "  Step 1. kb_list_layers                      ← discover available layers",
+    "  Step 2. kb_list_keywords(layer?)             ← you are here" + (layer ? ` (filtered by '${layer}')` : ""),
+    "  Step 3. kb_list_frontmatter_by_keywords(keywords) ← pick relevant keywords from the list above",
+    "  Step 4. kb_read_file(filename)               ← load the full content of a specific file",
     "",
     "Available keywords:",
     "",
@@ -58,6 +93,7 @@ export function formatEntriesByKeywords(index: KBEntry[], keywords: string[]): s
   for (const entry of matches) {
     lines.push(`• ${entry.title}`);
     lines.push(`  file: ${entry.relativePath}`);
+    lines.push(`  layer: ${entry.layer}`);
     if (entry.read_when.length > 0) {
       lines.push(`  read when:`);
       for (const rw of entry.read_when) {

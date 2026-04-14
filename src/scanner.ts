@@ -93,6 +93,7 @@ export function scanKB(kbDir: string): KBEntry[] {
         description: toString(frontmatter.description),
         read_when: toStringList(frontmatter.read_when),
         keywords: toStringList(frontmatter.keywords),
+        layer: toString(frontmatter.layer) || "default",
       });
     } catch {
       // skip unreadable files

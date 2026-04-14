@@ -19,6 +19,7 @@ keywords:
   - request
   - response
   - json
+layer: tech
 ---
 
 # REST API Design Conventions
@@ -32,13 +33,13 @@ keywords:
 
 ## HTTP Methods
 
-| Method | Purpose | Idempotent |
-|--------|---------|------------|
-| GET | Read resource(s) | Yes |
-| POST | Create resource | No |
-| PUT | Full update | Yes |
-| PATCH | Partial update | No |
-| DELETE | Remove resource | Yes |
+| Method | Purpose          | Idempotent |
+| ------ | ---------------- | ---------- |
+| GET    | Read resource(s) | Yes        |
+| POST   | Create resource  | No         |
+| PUT    | Full update      | Yes        |
+| PATCH  | Partial update   | No         |
+| DELETE | Remove resource  | Yes        |
 
 ## Error Response Format
 

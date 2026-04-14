@@ -7,6 +7,7 @@ keywords:
   - DUP
   - Dup
   - unique
+layer: frontend
 ---
 
 # Duplicate Keywords
