@@ -1,44 +1,77 @@
 # MCP Knowledge Base Server
 
-A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets AI agents browse and read a folder of Markdown knowledge-base files. Agents are guided through a strict 3-step workflow to minimise token usage: discover keywords → find relevant files → read one file at a time.
+A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets AI agents browse and read a folder of Markdown knowledge-base files. Agents are guided through a strict 4-step workflow to minimise token usage: discover layers → discover keywords → find relevant files → read one file at a time.
 
 ## How it works
 
 1. **Startup** — scans a directory of `.md` files, parses YAML frontmatter, and builds an in-memory index
 2. **Live reload** — watches the KB directory and automatically re-indexes when any `.md` file changes (2 s debounce)
-3. **3-step agent workflow** — tools are intentionally sequenced so agents never load more content than needed
+3. **4-step agent workflow** — tools are intentionally sequenced so agents never load more content than needed
 
 ```
-kb_list_keywords
-  └─→ kb_list_frontmatter_by_keywords(keywords[])
-        └─→ kb_read_file(filename)
+kb_list_layers
+  └─→ kb_list_keywords(layer?)
+        └─→ kb_list_frontmatter_by_keywords(keywords[])
+              └─→ kb_read_file(filename)
 ```
 
 ## Tools
 
-### 1. `kb_list_keywords` 
+### 1. `kb_list_layers`
 
-**Always call this first.** Returns every unique keyword from across all KB files, sorted alphabetically, plus instructions reminding the agent to follow the 3-step workflow.
+**Always call this first.** Returns every unique layer from across all KB files, sorted alphabetically, plus instructions reminding the agent to follow the 4-step workflow.
 
 Example output:
+```
+Knowledge base contains 6 files across 3 layers.
+
+REQUIRED WORKFLOW — you MUST follow these steps in order:
+  Step 1. kb_list_layers                      ← you are here
+  Step 2. kb_list_keywords(layer?)             ← pick a layer (or omit for all), discover keywords
+  Step 3. kb_list_frontmatter_by_keywords(keywords)
+  Step 4. kb_read_file(filename)
+
+Available layers:
+
+backend, default, frontend
+```
+
+---
+
+### 2. `kb_list_keywords(layer?)`
+
+**Step 2.** Returns every unique keyword, optionally filtered by layer. Pick relevant keywords and use them in step 3.
+
+| Parameter | Type     | Description                                                                       |
+| --------- | -------- | --------------------------------------------------------------------------------- |
+| `layer`   | `string` | Optional layer name from `kb_list_layers` to filter keywords. Omit for all layers |
+
+Example output (no layer filter):
 ```
 Knowledge base contains 6 files and 47 unique keywords.
 
 REQUIRED WORKFLOW — you MUST follow these steps in order:
-  Step 1. kb_list_keywords                    ← you are here
-  Step 2. kb_list_frontmatter_by_keywords(keywords)
-  Step 3. kb_read_file(filename)
+  Step 1. kb_list_layers                      ← discover available layers
+  Step 2. kb_list_keywords(layer?)             ← you are here
+  Step 3. kb_list_frontmatter_by_keywords(keywords) ← pick relevant keywords from the list above
+  Step 4. kb_read_file(filename)               ← load the full content of a specific file
 
 Available keywords:
 
 api, auth, cache, ci, database, deploy, error, jwt, ...
 ```
 
+Example output (filtered by layer):
+```
+Knowledge base contains 3 files in layer 'backend' and 22 unique keywords.
+...
+```
+
 ---
 
-### 2. `kb_list_frontmatter_by_keywords(keywords)`
+### 3. `kb_list_frontmatter_by_keywords(keywords)`
 
-**Step 2.** Pass one or more keywords from step 1. Returns the `title`, `file`, and `read_when` triggers of every KB entry that matches at least one keyword. No full file content is returned — keeping this call cheap.
+**Step 3.** Pass one or more keywords from step 2. Returns the `title`, `file`, `layer`, and `read_when` triggers of every KB entry that matches at least one keyword. No full file content is returned — keeping this call cheap.
 
 | Parameter  | Type       | Description                                         |
 | ---------- | ---------- | --------------------------------------------------- |
@@ -50,21 +83,23 @@ Found 2 entries matching [auth, jwt]:
 
 • OAuth2 Authentication Flow
   file: auth-flow.md
+  layer: backend
   read when:
     - Implementing login or sign-in flows
     - Debugging token expiry issues
 
 • REST API Design Conventions
   file: api-design.md
+  layer: backend
   read when:
     - Creating new API endpoints
 ```
 
 ---
 
-### 3. `kb_read_file(filename)`
+### 4. `kb_read_file(filename)`
 
-**Step 3.** Loads the complete markdown content (frontmatter + body) of a single file. Only one file is returned per call, keeping token usage predictable.
+**Step 4.** Loads the complete markdown content (frontmatter + body) of a single file. Only one file is returned per call, keeping token usage predictable.
 
 | Parameter  | Type     | Description                                                                           |
 | ---------- | -------- | ------------------------------------------------------------------------------------- |
@@ -89,18 +124,20 @@ keywords:
   - keyword1
   - keyword2
   - synonym-or-alias
+layer: backend
 ---
 
 # Full document body here
 ...
 ```
 
-| Field         | Purpose                                                   | Notes                  |
-| ------------- | --------------------------------------------------------- | ---------------------- |
-| `title`       | Display name shown to the agent                           | Required               |
-| `description` | Brief summary                                             | Optional               |
-| `read_when`   | Natural-language scenarios that trigger reading this file | Optional               |
-| `keywords`    | Curated search terms used in step 1 & 2                   | Required for discovery |
+| Field         | Purpose                                                   | Notes                                  |
+| ------------- | --------------------------------------------------------- | -------------------------------------- |
+| `title`       | Display name shown to the agent                           | Required                               |
+| `description` | Brief summary                                             | Optional                               |
+| `read_when`   | Natural-language scenarios that trigger reading this file | Optional                               |
+| `keywords`    | Curated search terms used in step 2 & 3                   | Required for discovery                 |
+| `layer`       | Categorises the file into a named layer                   | Optional, defaults to `"default"`      |
 
 **Tip:** `keywords` bridges vocabulary gaps. If users ask about "login" but your file is about "OAuth2", add `login` to `keywords`.
 
